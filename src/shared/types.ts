@@ -1,0 +1,8 @@
+import type { ActionId, ItemId, Phase, Stats, Text, Trait } from './config';
+export type Mutation = { id:string; itemId:ItemId; participantId:string; ordinal:number; threshold:number; before:number; after:number; serverOrder:number; name:Text };
+export type Candidate = {id:string;kind:'dominant'|'secret'|'alternative'|'mutation';name:Text;description:Text;stats:Stats;sourceItemIds:ItemId[];recipeId:string|null;mutations:Mutation[];prompt:string;seed:number;imageUrl:string;imageSource:'nosana-live'|'pre-generated';votes?:number};
+export type Outcome = {actionId:ActionId;tier:number;score:number;text:Text};
+export type PersonalResult = {shareId:string;itemId:ItemId;count:number;points:Stats;title:Text;titleReason:Text;evidence:Text[];evolutionVote:string|null;trialVote:ActionId|null;evolutionWon:boolean|null;trialMatched:boolean|null;mutations:Mutation[];graphVerified:boolean};
+export type PublicState = {id:string;phase:Phase;phaseRevision:number;version:number;serverNow:number;phaseEndsAt:number|null;participantCount:number;totals:Record<ItemId,number>;totalAccepted:number;candidates:Candidate[];winner:Candidate|null;outcome:Outcome|null;voteCount:number;trialVoteCount:number;alignment:number;stats:Stats;enableTrial:boolean;generation:{ready:number;source:string};persistence:'ready'|'pending';graphStatus:'disabled'|'ready'|'pending';joinUrl:string;stageUrl:string;mutations:Mutation[]};
+export type Me = {participantId:string;displayName:Text;itemId:ItemId;lastSeq:number;lastClientTotal:number;acceptedTotal:number;evolutionVote:string|null;trialVote:ActionId|null;result:PersonalResult|null;state:PublicState};
+export type Fact = {trait:Trait;points:number};

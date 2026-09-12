@@ -1,0 +1,36 @@
+import { Daytona } from '@daytona/sdk';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+if(existsSync('.env'))process.loadEnvFile('.env');
+if(!process.env.DAYTONA_API_KEY||!process.env.DAYTONA_SANDBOX_ID)throw Error('Set DAYTONA_API_KEY and DAYTONA_SANDBOX_ID for an approved sandbox.');
+if(!existsSync('dist/index.html'))throw Error('Run npm run build first.');
+const daytona=new Daytona({apiKey:process.env.DAYTONA_API_KEY});
+const sandbox=await daytona.get(process.env.DAYTONA_SANDBOX_ID);
+// Starting this explicitly selected sandbox can consume account credits.
+await sandbox.start(60);
+const home=await sandbox.getUserHomeDir();if(!home)throw Error('Sandbox home directory unavailable.');
+const remote=`${home}/crowd-monster`,quote=(s:string)=>`'${s.replaceAll("'","'\\''")}'`;
+const preview=sandbox.public?await sandbox.getPreviewLink(3000):await sandbox.getSignedPreviewUrl(3000,3600);
+const local=resolve('data');mkdirSync(local,{recursive:true});
+const archive=resolve(local,'daytona-source.tar.gz');
+execFileSync('tar',['-czf',archive,'package.json','package-lock.json','tsconfig.json','vite.config.ts','index.html','src','dist','public','workflows'],{stdio:'pipe'});
+await sandbox.process.executeCommand(`mkdir -p ${quote(remote)}`);
+await sandbox.fs.uploadFile(readFileSync(archive),`${remote}/app.tar.gz`);
+const secret=process.env.HOST_SECRET||randomBytes(32).toString('hex');
+writeFileSync(resolve(local,'daytona-host-key.txt'),secret,{mode:0o600});
+const runtimeKeys=['IMAGE_PROVIDER','NEO4J_URI','NEO4J_USERNAME','NEO4J_PASSWORD','NEO4J_DATABASE','COMFY_BASE_URL','COMFY_AUTH_HEADER_NAME','COMFY_AUTH_HEADER_VALUE','NOSANA_DEPLOYMENT_ID'];
+const runtime:Record<string,string>={PORT:'3000',APP_ORIGIN:preview.url,HOST_SECRET:secret,DATA_DIR:'./data',COMFY_WORKFLOW_PATH:'./workflows/monster-api.json',COMFY_MAP_PATH:'./workflows/workflow-map.json'};
+for(const key of runtimeKeys)if(process.env[key])runtime[key]=process.env[key]!;
+const dotenv=Object.entries(runtime).map(([k,v])=>{if(/[\r\n]/.test(v))throw Error(`Invalid multiline setting: ${k}`);return `${k}=${JSON.stringify(v)}`;}).join('\n');
+await sandbox.fs.uploadFile(Buffer.from(dotenv),`${remote}/.env`);
+const install=await sandbox.process.executeCommand(`tar -xzf app.tar.gz && chmod 600 .env && npm ci --omit=dev --no-audit --no-fund`,remote,undefined,180);
+if(install.exitCode!==0)throw Error('Remote installation failed; inspect the sandbox console.');
+const sessionId=`hatch-${Date.now()}`;await sandbox.process.createSession(sessionId);
+await sandbox.process.executeSessionCommand(sessionId,{command:`cd ${quote(remote)} && npm start`,runAsync:true});
+let healthy=false;for(let i=0;i<20;i++){await new Promise(r=>setTimeout(r,500));const check=await sandbox.process.executeCommand('curl -fsS http://localhost:3000/api/health',remote,undefined,5);if(check.exitCode===0){healthy=true;break;}}
+if(!healthy)throw Error('Remote health check failed; inspect the process session.');
+const output={url:preview.url,hostUrl:`${preview.url}/host`,sandboxId:sandbox.id,processSession:sessionId,previewMode:sandbox.public?'public':'signed, expires in 1 hour',hostKeyFile:resolve(local,'daytona-host-key.txt')};
+writeFileSync(resolve(local,'daytona-deployment.json'),JSON.stringify(output,null,2),{mode:0o600});
+console.log(JSON.stringify(output,null,2));

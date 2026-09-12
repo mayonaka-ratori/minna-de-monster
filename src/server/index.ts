@@ -1,0 +1,62 @@
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { timingSafeEqual, randomBytes } from 'node:crypto';
+import express from 'express';
+import { z } from 'zod';
+import { aggregate, applyTap, createSession, GameError, hash, join, makeCandidates, publicState, start, tick, transition, type Person, type Session } from './engine';
+import { GraphRepository } from './graph';
+import { generate } from './generation';
+import { traitNames, type Stats } from '../shared/config';
+if(existsSync('.env'))process.loadEnvFile('.env');
+const port=Number(process.env.PORT)||3000, origin=process.env.APP_ORIGIN||`http://localhost:${port}`, data=resolve(process.env.DATA_DIR||'data');
+mkdirSync(resolve(data,'sessions'),{recursive:true});mkdirSync(resolve(data,'assets'),{recursive:true});
+const secret=process.env.HOST_SECRET||randomBytes(32).toString('hex'),sessions=new Map<string,Session>(),graph=new GraphRepository();
+for(const file of readdirSync(resolve(data,'sessions')).filter(f=>f.endsWith('.json'))){try{const s=JSON.parse(readFileSync(resolve(data,'sessions',file),'utf8')) as Session;if(s.phase!=='RESULTS'&&s.phase!=='INTERRUPTED')transition(s,'INTERRUPTED',Date.now());sessions.set(s.id,s);}catch{console.error('A saved session could not be read.');}}
+function saveDisk(){for(const s of sessions.values()){try{const path=resolve(data,'sessions',`${s.id}.json`);s.persistence='ready';writeFileSync(`${path}.tmp`,JSON.stringify(s),{mode:0o600});renameSync(`${path}.tmp`,path);}catch{s.persistence='pending';}}}
+let graphChain=Promise.resolve();
+function graphTask<T>(fn:()=>Promise<T>):Promise<T>{const run=graphChain.then(fn);graphChain=run.then(()=>{},()=>{});return run;}
+const controllers=new Map<string,AbortController>();
+async function prepare(s:Session){
+  s.generationStarted=true;s.generationLog={requestKey:s.generationKey,startedAt:Date.now(),deploymentId:process.env.NOSANA_DEPLOYMENT_ID||null,prompts:[],failures:[]};
+  let facts:Stats|undefined;
+  if(graph.driver){s.graphStatus='pending';const snapshot=structuredClone(s);try{const actual=await Promise.race([graphTask(async()=>{await graph.save(snapshot);return graph.facts(s.id);}),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('GRAPH_TIMEOUT')),3000))]);if(JSON.stringify(actual)!==JSON.stringify(s.raw))throw Error('GRAPH_MISMATCH');facts=actual;s.graphStatus='ready';}catch{s.graphStatus='pending';}}
+  if(s.phase!=='GENERATING')return;makeCandidates(s,facts);
+  if(process.env.IMAGE_PROVIDER!=='nosana'){s.generationDone=true;s.generationLog.mode='fallback';s.version++;return;}
+  const controller=new AbortController();controllers.set(s.id,controller);
+  try{const result=await generate(s.candidates,data,controller.signal,(cid,url,promptId)=>{if(s.phase!=='GENERATING')return;const c=s.candidates.find(c=>c.id===cid)!;c.imageUrl=url;c.imageSource='nosana-live';(s.generationLog.prompts as unknown[]).push({candidateId:cid,promptId});s.version++;});s.generationLog.failures=result.filter(r=>r.status==='rejected').map(r=>r.status==='rejected'?String(r.reason?.message||'GPU_FAILED'):'');}
+  catch(e){s.generationLog.failures=[e instanceof Error?e.message:'GPU_FAILED'];}
+  finally{if(s.phase==='GENERATING'){s.generationDone=true;s.version++;}s.generationLog.finishedAt=Date.now();controllers.delete(s.id);saveDisk();}
+}
+function advance(s:Session){for(let i=0;i<4;i++){const prev=s.phase;tick(s);if(s.phase===prev)break;}if(s.phase==='GENERATING'&&!s.generationStarted)void prepare(s);if(s.phase!=='GENERATING'){controllers.get(s.id)?.abort();controllers.delete(s.id);}}
+let projectionBusy=false;const projectedVersions=new Map<string,number>();
+setInterval(()=>{for(const s of sessions.values())advance(s);},100);
+setInterval(()=>{saveDisk();if(projectionBusy||!graph.driver||graph.status!=='ready')return;projectionBusy=true;void(async()=>{try{for(const s of sessions.values()){if(projectedVersions.get(s.id)===s.version)continue;const snapshot=structuredClone(s);await graphTask(()=>graph.save(snapshot));projectedVersions.set(s.id,snapshot.version);if(s.phase==='RESULTS'){for(const p of Object.values(s.people)){try{const facts=await graph.personalFacts(s.id,p.id);if(p.result&&!p.result.graphVerified&&Object.entries(p.result.points).filter(([,v])=>v>0).every(([t,v])=>facts.some(f=>f.trait===t&&f.points===v))){p.result.graphVerified=true;s.version++;}}catch{/* retry next projection */}}s.graphStatus='ready';}}}catch{for(const s of sessions.values())if(s.phase!=='INTERRUPTED')s.graphStatus='pending';}finally{projectionBusy=false;}})();},1000);
+void graph.init();setInterval(()=>{if(graph.driver&&graph.status!=='ready')void graph.init();},15000);
+const app=express();app.disable('x-powered-by');app.set('etag',false);app.use(express.json({limit:'16kb'}));
+app.use((req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');if(req.path.startsWith('/api'))res.setHeader('Cache-Control','no-store');const requestOrigin=req.get('Origin');if(req.method==='POST'&&requestOrigin&&requestOrigin!==origin&&requestOrigin!==`http://${req.get('host')}`&&requestOrigin!==`https://${req.get('host')}`){res.status(403).json({error:{code:'FORBIDDEN'}});return;}next();});
+const rate=new Map<string,{at:number;count:number}>();app.use('/api',(req,res,next)=>{const key=req.get('authorization')?.slice(0,120)||req.socket.remoteAddress||'',now=Date.now(),r=rate.get(key);if(!r||now-r.at>1000)rate.set(key,{at:now,count:1});else if(++r.count>250){res.status(429).json({error:{code:'RATE_LIMITED'}});return;}next();});setInterval(()=>{for(const[k,v]of rate)if(Date.now()-v.at>10000)rate.delete(k);},10000);
+function authenticate(req:express.Request,res:express.Response,next:express.NextFunction){const bearer=(req.get('authorization')||'').replace(/^Bearer /,'');const a=Buffer.from(hash(bearer)),b=Buffer.from(hash(secret));if(!timingSafeEqual(a,b)){res.status(401).json({error:{code:'UNAUTHORIZED'}});return;}next();}
+function getSession(req:express.Request){const sid=String(req.params.id);const s=sessions.get(sid);if(!s)throw new GameError('NOT_FOUND',404);advance(s);return s;}
+function person(req:express.Request,s:Session):Person{const bearer=(req.get('authorization')||'').replace(/^Bearer /,'');const p=Object.values(s.people).find(p=>p.tokenHash===hash(bearer));if(!p)throw new GameError('UNAUTHORIZED',401);return p;}
+app.get('/api/health',(_req,res)=>res.json({ok:true}));
+app.post('/api/local-host',(req,res)=>{const local=['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress||'');const host=req.get('host')||'';if(!local||!new RegExp(`^(localhost|127\\.0\\.0\\.1):${port}$`).test(host)){res.status(403).json({error:{code:'HOST_KEY_REQUIRED'}});return;}res.json({token:secret});});
+app.get('/api/host/health',authenticate,(_req,res)=>res.json({graph:graph.status,gpu:process.env.IMAGE_PROVIDER==='nosana'?(process.env.COMFY_BASE_URL?'configured':'missing'):'fallback',origin,sessions:[...sessions.values()].map(s=>({id:s.id,phase:s.phase,participants:Object.keys(s.people).length}))}));
+const commands=new Map<string,{body:string;result:unknown}>(),joins=new Map<string,{expires:number;result:unknown}>();
+setInterval(()=>{for(const[k,v]of joins)if(Date.now()>v.expires)joins.delete(k);},10000);
+const createSchema=z.object({commandId:z.string().uuid(),enableTrial:z.boolean().default(true)});
+app.post('/api/sessions',authenticate,(req,res)=>{const body=createSchema.parse(req.body),key=`create:${body.commandId}`,prior=commands.get(key);if(prior){if(prior.body!==JSON.stringify(body))throw new GameError('COMMAND_CONFLICT');res.json(prior.result);return;}if([...sessions.values()].some(s=>!['RESULTS','INTERRUPTED'].includes(s.phase)))throw new GameError('SESSION_ACTIVE');const s=createSession(body.enableTrial);s.graphStatus=graph.driver?'pending':'disabled';sessions.set(s.id,s);const result=publicState(s,origin);commands.set(key,{body:JSON.stringify(body),result});saveDisk();res.status(201).json(result);});
+app.post('/api/sessions/:id/join',(req,res)=>{const s=getSession(req),{joinRequestId}=z.object({joinRequestId:z.string().uuid()}).parse(req.body),key=`${s.id}:${joinRequestId}`,cached=joins.get(key);if(cached&&cached.expires>Date.now()){res.json(cached.result);return;}const {person:p,token}=join(s),result={participantId:p.id,token,itemId:p.itemId,displayName:p.displayName};joins.set(key,{expires:Date.now()+60000,result});res.status(201).json(result);});
+app.get('/api/sessions/:id/state',(req,res)=>res.json(publicState(getSession(req),origin)));
+app.get('/api/sessions/:id/me',(req,res)=>{const s=getSession(req),p=person(req,s);res.json({participantId:p.id,displayName:p.displayName,itemId:p.itemId,lastSeq:p.lastSeq,lastClientTotal:p.lastClientTotal,acceptedTotal:p.acceptedTotal,evolutionVote:p.evolutionVote,trialVote:p.trialVote,result:p.result,state:publicState(s,origin)});});
+app.post('/api/sessions/:id/taps',(req,res)=>{const s=getSession(req),p=person(req,s),body=z.object({roundId:z.literal('round-1'),seq:z.number().int().positive(),clientTotal:z.number().int().nonnegative().max(10000)}).parse(req.body);res.json(applyTap(s,p,body));});
+app.post('/api/sessions/:id/votes/:kind',async(req,res)=>{const s=getSession(req),p=person(req,s),kind=z.enum(['evolution','trial']).parse(req.params.kind),body=z.object({targetId:z.string().max(80)}).parse(req.body);const {vote}=await import('./engine');vote(s,p,kind,body.targetId);saveDisk();res.json({ok:true});});
+app.post('/api/sessions/:id/commands',authenticate,(req,res)=>{const s=getSession(req),body=z.object({commandId:z.string().uuid(),expectedPhaseRevision:z.number().int(),type:z.enum(['start','use-fallback','interrupt'])}).parse(req.body),key=`${s.id}:${body.commandId}`,prior=commands.get(key);if(prior){if(prior.body!==JSON.stringify(body))throw new GameError('COMMAND_CONFLICT');res.json(prior.result);return;}if(body.expectedPhaseRevision!==s.phaseRevision)throw new GameError('STALE_PHASE');if(body.type==='start')start(s);if(body.type==='interrupt'){if(['RESULTS','INTERRUPTED'].includes(s.phase))throw new GameError('PHASE_CLOSED');transition(s,'INTERRUPTED',Date.now());controllers.get(s.id)?.abort();}if(body.type==='use-fallback'){if(s.phase!=='GENERATING')throw new GameError('PHASE_CLOSED');makeCandidates(s);s.generationDone=true;controllers.get(s.id)?.abort();transition(s,'REVEAL',Date.now());}const result=publicState(s,origin);commands.set(key,{body:JSON.stringify(body),result});saveDisk();res.json(result);});
+app.get('/api/sessions/:id/result',(req,res)=>{const s=getSession(req);if(s.phase!=='RESULTS')throw new GameError('RESULT_NOT_READY');res.json(publicState(s,origin));});
+app.get('/api/sessions/:id/me/result',(req,res)=>{const s=getSession(req),p=person(req,s);if(!p.result)throw new GameError('RESULT_NOT_READY');res.json({result:p.result,state:publicState(s,origin)});});
+app.get('/api/shared-results/:shareId',(req,res)=>{for(const s of sessions.values())if(s.phase==='RESULTS')for(const p of Object.values(s.people))if(p.shareId===req.params.shareId&&p.result){res.json({result:{...p.result,mutations:p.result.mutations.map(m=>({...m,participantId:''}))},state:publicState(s,origin)});return;}throw new GameError('NOT_FOUND',404);});
+app.use('/api',(_req,res)=>res.status(404).json({error:{code:'NOT_FOUND'}}));
+app.use((err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{const code=err instanceof GameError?err.code:err instanceof z.ZodError?'INVALID_INPUT':'SERVER_ERROR';res.status(err instanceof GameError?err.status:err instanceof z.ZodError?422:500).json({error:{code,retryable:code==='SERVER_ERROR'},serverNow:Date.now()});});
+app.use('/assets',express.static(resolve(data,'assets'),{immutable:true,maxAge:'7d',dotfiles:'deny'}));
+if(existsSync('dist/index.html')){app.use(express.static(resolve('dist')));app.get('/{*path}',(_req,res)=>res.sendFile(resolve('dist/index.html')));}else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true},appType:'spa'});app.use(vite.middlewares);}
+const server=app.listen(port,'0.0.0.0',()=>console.log(`HATCH: ${origin} • host: ${origin}/host • ${process.env.IMAGE_PROVIDER||'fallback'} images`));server.on('error',()=>{console.error('HTTP server could not start. Check the port and permissions.');process.exit(1);});
+process.on('SIGINT',()=>{saveDisk();void graph.driver?.close();process.exit(0);});
