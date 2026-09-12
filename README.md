@@ -36,6 +36,25 @@ Lobby → 5-second countdown → 15-second feeding → 1-second final batch → 
 - Contributions and mutation thresholds have factual explanations in both languages. They do not claim that a diffusion model always drew a requested feature.
 - Completed results are saved to `data/sessions` and images to `data/assets`. Keep that directory on persistent storage. Restarting interrupts an unfinished game instead of pretending to recover unacknowledged taps.
 
+## Split demo hosting
+
+The current demo uses **Daytona for the React screens and the Mac for the game API**. Browsers connect directly to the Mac through an HTTPS Cloudflare Quick Tunnel. Neo4j is connected from the Mac; Daytona does not make database calls. CORS accepts the configured Daytona APP_ORIGIN only. Host authentication remains required.
+
+Keep the Mac awake and online, and keep both the API process and tunnel running. Closing the laptop or stopping the tunnel disconnects the game. The tunnel URL changes when recreated; deploy the frontend again with the new URL. GPU generation is currently stopped and the game uses labeled fallback illustrations.
+
+To restart this demo with the existing private configuration:
+
+```sh
+# Terminal 1, from the app directory
+caffeinate -i npm run demo:server
+# Terminal 2, using the installed official cloudflared binary
+cloudflared tunnel --url http://127.0.0.1:3001
+# Terminal 3, pass the HTTPS URL printed by cloudflared
+npm run demo:deploy -- https://YOUR-TUNNEL.trycloudflare.com
+```
+
+`.env.demo` must contain PORT=3001, the Daytona URL as APP_ORIGIN, HOST_SECRET, DATA_DIR, and the Neo4j credentials. It is ignored by Git. The management key stays in the local `.env`. The deployment command targets only the existing approved sandbox and switches its process to static frontend hosting.
+
 ## Verified demo status — 2026-09-12
 
 - Neo4j: connected; a complete two-player game and personal contribution paths were persisted and queried.

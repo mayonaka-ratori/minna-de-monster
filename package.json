@@ -9,7 +9,9 @@
     "start": "node --import tsx src/server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "smoke:gpu": "node --import tsx scripts/smoke-gpu.ts",
-    "daytona": "node --import tsx scripts/daytona.ts"
+    "daytona": "node --import tsx scripts/daytona.ts",
+    "demo:server": "node --env-file=.env.demo --import tsx src/server/index.ts",
+    "demo:deploy": "node --import tsx scripts/demo-deploy.ts"
   },
   "dependencies": {
     "@daytona/sdk": "0.211.2",
