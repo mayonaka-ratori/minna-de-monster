@@ -2,6 +2,12 @@
 
 A live, shared creature game for 5–50 players. **English is the default.** The EN / JP tabs switch all player-facing instructions, generated names, explanations, outcomes, errors, titles, and sharing text without restarting the game. The selected language is remembered on that device.
 
+## Pitch and implementation plan
+
+[Three-slide pitch](docs/hatch-3slides.pptx) · [Implementation plan](docs/implementation-plan.md)
+
+![HATCH concept and app screenshot](docs/hatch-slide-1.png)
+
 ## Run locally
 
 Requires Node.js 22+ and npm. Tested with Node.js 24.
