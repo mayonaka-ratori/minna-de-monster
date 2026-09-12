@@ -5,11 +5,12 @@ import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 if(existsSync('.env'))process.loadEnvFile('.env');
 if(!process.env.DAYTONA_API_KEY||!process.env.DAYTONA_SANDBOX_ID)throw Error('Set DAYTONA_API_KEY and DAYTONA_SANDBOX_ID for an approved sandbox.');
+if(!/^dtn_[A-Za-z0-9_-]{32,}$/.test(process.env.DAYTONA_API_KEY))throw Error('Invalid Daytona API key. Use the complete value from Show API key, not the masked value or API URL.');
 if(!existsSync('dist/index.html'))throw Error('Run npm run build first.');
 const daytona=new Daytona({apiKey:process.env.DAYTONA_API_KEY});
 const sandbox=await daytona.get(process.env.DAYTONA_SANDBOX_ID);
 // Starting this explicitly selected sandbox can consume account credits.
-await sandbox.start(60);
+if(sandbox.state!=='started')await sandbox.start(60);
 const home=await sandbox.getUserHomeDir();if(!home)throw Error('Sandbox home directory unavailable.');
 const remote=`${home}/crowd-monster`,quote=(s:string)=>`'${s.replaceAll("'","'\\''")}'`;
 const preview=sandbox.public?await sandbox.getPreviewLink(3000):await sandbox.getSignedPreviewUrl(3000,3600);

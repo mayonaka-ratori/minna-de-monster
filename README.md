@@ -18,7 +18,7 @@ npm run build
 npm start
 ```
 
-Open [the app](http://localhost:3000) or [host controls](http://localhost:3000/host). The host key is acquired automatically only for a direct localhost connection. Create a room, open the big screen, then join from a second tab or another device. Start the game after participants have joined.
+Open [the app](http://localhost:3000) or [host controls](http://localhost:3000/host). The host key is acquired automatically only for a direct localhost connection when APP_ORIGIN is local and no HOST_SECRET is configured. Public deployments always require the host key. Create a room, open the big screen, then join from a second tab or another device. Start the game after participants have joined.
 
 The initial mode uses the three bundled original SVG creatures as clearly labeled fallback artwork. It needs no cloud credentials. It still runs a real shared server: players, counts, votes and results are not browser-only mock data.
 
@@ -40,7 +40,7 @@ Lobby → 5-second countdown → 15-second feeding → 1-second final batch → 
 
 - Neo4j: connected; a complete two-player game and personal contribution paths were persisted and queried.
 - Nosana: one smoke run generated three images in 18.0 seconds. The GPU deployment was then stopped within the approved 30-minute window. The verified workflow is included.
-- Daytona: sandbox created; application deployment remains pending because API-key authentication failed. No public app URL is available yet.
+- Daytona: authentication fixed and app deployed. [Open HATCH](https://3000-56d9f70b-3ec8-4729-9c35-593aff0ce322.daytonaproxy01.net). The sandbox auto-stops after 30 minutes of inactivity; auto-delete is disabled. The host key is stored outside Git in `data/daytona-host-key.txt`.
 - Local play: full game flow verified, 13 tests passed, production build passed. EN is the default, with EN / JP tabs.
 
 ## External connections
@@ -61,7 +61,7 @@ npm run smoke:gpu
 npm run daytona
 ```
 
-It starts the sandbox, uploads the built app and runtime configuration, installs runtime dependencies, creates a long-lived process and checks `/api/health`. It does not create an account, buy credits, create an API key, or change a sandbox to public. A private sandbox gets a one-hour signed preview URL. The generated host key is saved locally to `data/daytona-host-key.txt`; management API keys are not forwarded into the app runtime. Starting the selected sandbox can consume credits. This is a first-deployment script; stop an existing HATCH process before redeploying to the same port.
+It rejects malformed or masked API keys, starts the sandbox when needed, uploads the built app and runtime configuration, installs runtime dependencies, creates a long-lived process and checks `/api/health`. It does not create an account, buy credits, create an API key, or change a sandbox to public. A private sandbox gets a one-hour signed preview URL. The generated host key is saved locally to `data/daytona-host-key.txt`; management API keys are not forwarded into the app runtime. Starting the selected sandbox can consume credits. This is a first-deployment script; stop an existing HATCH process before redeploying to the same port.
 
 Preview expiration and sandbox shutdown also end result access. For seven-day keepsakes, maintain a stable HTTPS origin and persistent `data/` storage for that period. This build does not silently publish to a second hosting provider.
 
