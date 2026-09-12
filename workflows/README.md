@@ -1,8 +1,8 @@
 # Nosana / ComfyUI workflow
 
-Use a workflow that has already produced an image on your Nosana GPU. Export it in **API format** as `monster-api.json`. No guessed model filenames or node IDs are shipped.
+The bundled `monster-api.json` was verified on Nosana on 2026-09-12: ComfyUI 0.33.3, RTX 4060 Ti, `v1-5-pruned-emaonly.safetensors`, 512×512, 20 Euler steps. One smoke run returned all three images in 18.0 seconds. The GPU was then stopped. Reuse this workflow on a deployment with the same checkpoint, or export a successful workflow in **API format**.
 
-Create `workflow-map.json` with the actual node IDs:
+The bundled `workflow-map.json` points to text nodes 6/7, sampler 3, and output 9. For another workflow, map its actual node IDs:
 
 ```json
 {"positive":["YOUR_TEXT_NODE"],"negative":["YOUR_NEGATIVE_TEXT_NODE"],"seed":["YOUR_SAMPLER_NODE"],"output":"YOUR_SAVE_IMAGE_NODE"}

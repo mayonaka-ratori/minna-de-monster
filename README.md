@@ -36,6 +36,13 @@ Lobby → 5-second countdown → 15-second feeding → 1-second final batch → 
 - Contributions and mutation thresholds have factual explanations in both languages. They do not claim that a diffusion model always drew a requested feature.
 - Completed results are saved to `data/sessions` and images to `data/assets`. Keep that directory on persistent storage. Restarting interrupts an unfinished game instead of pretending to recover unacknowledged taps.
 
+## Verified demo status — 2026-09-12
+
+- Neo4j: connected; a complete two-player game and personal contribution paths were persisted and queried.
+- Nosana: one smoke run generated three images in 18.0 seconds. The GPU deployment was then stopped within the approved 30-minute window. The verified workflow is included.
+- Daytona: sandbox created; application deployment remains pending because API-key authentication failed. No public app URL is available yet.
+- Local play: full game flow verified, 13 tests passed, production build passed. EN is the default, with EN / JP tabs.
+
 ## External connections
 
 Copy `.env.example` to `.env`, fill only the settings you have, and restart the server. Never commit `.env` or `data/`.
